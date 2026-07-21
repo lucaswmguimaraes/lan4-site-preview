@@ -106,7 +106,9 @@ function lan4RdUtmPayload() {
   if (u.utm_campaign) p.cf_utm_campaign = u.utm_campaign;
   if (u.utm_term)     p.cf_utm_term     = u.utm_term;
   if (u.utm_content)  p.cf_utm_content  = u.utm_content;
-  var servico = lan4ServicoInteresse(u);
+  /* Em páginas de serviço (/s/<slug>/), window.LAN4_SERVICO_PAGINA garante o
+     serviço de interesse mesmo em acesso sem UTM (orgânico/direto/compartilhado) */
+  var servico = lan4ServicoInteresse(u) || window.LAN4_SERVICO_PAGINA || '';
   if (servico) p.cf_servico_de_interesse = servico;
   return p;
 }
@@ -149,6 +151,38 @@ function lan4ValidaObrigatorios(form, campos) {
     if (!lan4CampoValor(form, campos[i][0])) return 'Preencha o campo obrigatório: ' + campos[i][1] + '.';
   }
   return '';
+}
+
+/* Campos obrigatórios declarados no HTML: data-req="name:Rótulo,name:Rótulo" por etapa */
+function lan4ReqEtapa(step) {
+  return (step.getAttribute('data-req') || '').split(',').filter(Boolean).map(function (par) {
+    var i = par.indexOf(':');
+    return [par.slice(0, i).trim(), par.slice(i + 1).trim()];
+  });
+}
+
+/* Todos os obrigatórios do form (união das etapas) — usado na validação do submit */
+function lan4ReqDoForm(form) {
+  var campos = [];
+  $$('.lf-step', form).forEach(function (s) { campos = campos.concat(lan4ReqEtapa(s)); });
+  return campos;
+}
+
+/* Identificador de conversão do RD por form: declarado em data-rd-id no <form>
+   (páginas de serviço usam identificadores próprios, ex.: lan4-lp-redes-sociais) */
+function lan4FormId(form, fallback) {
+  return form.getAttribute('data-rd-id') || fallback || form.id || 'form-sem-id';
+}
+
+/* Campos extras específicos da página: grupos com data-rd-cf="cf_x" data-rd-name="name"
+   entram no payload do RD sem mexer no JS — cada página declara os seus no HTML */
+function lan4ExtrasRd(form) {
+  var extras = {};
+  $$('[data-rd-cf]', form).forEach(function (el) {
+    var valor = lan4CampoValor(form, el.getAttribute('data-rd-name') || '');
+    if (valor) extras[el.getAttribute('data-rd-cf')] = valor;
+  });
+  return extras;
 }
 
 /* ─── Sticky CTA mobile ────────────────────────────────────────────────
@@ -202,7 +236,7 @@ document.addEventListener('focusin', function (e) {
   form.dataset.lan4Started = '1';
   window.dataLayer.push({
     event: 'form_start',
-    form_identifier: form.id === 'lf' ? 'lan4-contato-site' : (form.id === 'lf2' ? 'lan4-servicos-cta' : (form.id || 'form-sem-id'))
+    form_identifier: lan4FormId(form, form.id === 'lf' ? 'lan4-contato-site' : (form.id === 'lf2' ? 'lan4-servicos-cta' : ''))
   });
 });
 
@@ -229,13 +263,6 @@ function lan4MultiStep(form, identificador) {
   var title = $('[data-step-title]', form);
   var cur = 0;
 
-  function reqDaEtapa(step) {
-    return (step.getAttribute('data-req') || '').split(',').filter(Boolean).map(function (par) {
-      var i = par.indexOf(':');
-      return [par.slice(0, i).trim(), par.slice(i + 1).trim()];
-    });
-  }
-
   function mostra(i) {
     steps.forEach(function (s, j) { s.classList.toggle('is-active', j === i); });
     segs.forEach(function (s, j) {
@@ -249,7 +276,7 @@ function lan4MultiStep(form, identificador) {
 
   function validaEtapa(i) {
     var step = steps[i];
-    var erro = lan4ValidaObrigatorios(form, reqDaEtapa(step));
+    var erro = lan4ValidaObrigatorios(form, lan4ReqEtapa(step));
     if (!erro && step.querySelector('[name="telefone"]')) erro = lan4ValidaTelefone(lan4CampoValor(form, 'telefone'));
     var m = $('.lf-step-msg', step);
     if (m) { m.style.display = erro ? 'block' : 'none'; m.textContent = erro || ''; }
@@ -287,8 +314,12 @@ function lan4MultiStep(form, identificador) {
 
   mostra(0);
 }
-lan4MultiStep(document.getElementById('lf'),  'lan4-contato-site');
-lan4MultiStep(document.getElementById('lf2'), 'lan4-servicos-cta');
+(function () {
+  var lf  = document.getElementById('lf');
+  var lf2 = document.getElementById('lf2');
+  if (lf)  lan4MultiStep(lf,  lan4FormId(lf,  'lan4-contato-site'));
+  if (lf2) lan4MultiStep(lf2, lan4FormId(lf2, 'lan4-servicos-cta'));
+})();
 
 /* ─── Envio ao RD Station — com modo prévia ─────────────────────────────
    Fora de lan4.com.br (window.LAN4_PREVIEW, definido no index.html) o
@@ -840,12 +871,9 @@ $$('[data-popup-open]').forEach(btn => {
     var v   = function (n) { return lan4CampoValor(form, n); };
     var btn = form.querySelector('button[type="submit"]');
     var btnTexto = btn.textContent;
+    var identificador = lan4FormId(form, 'lan4-servicos-cta');
 
-    var erro = lan4ValidaObrigatorios(form, [
-      ['nome', 'Nome'], ['email', 'Email'], ['telefone', 'Telefone'], ['empresa', 'Empresa'],
-      ['cargo', 'Cargo'], ['faturamento', 'Faturamento médio mensal'], ['ticket', 'Ticket médio aproximado'],
-      ['lgpd_consent', 'Autorização de contato (LGPD)']
-    ]) || lan4ValidaTelefone(v('telefone'));
+    var erro = lan4ValidaObrigatorios(form, lan4ReqDoForm(form)) || lan4ValidaTelefone(v('telefone'));
     if (erro) {
       msg.className = 'lf-msg err';
       msg.style.display = 'block';
@@ -866,7 +894,7 @@ $$('[data-popup-open]').forEach(btn => {
 
     lan4EnviaRd(Object.assign({
       token_rdstation:              'd5d170dfe71825a3ebc37e6699f10652',
-      identificador:                'lan4-servicos-cta',
+      identificador:                identificador,
       email:                        lead.email,
       nome:                         lead.nome,
       telefone:                     lead.telefone,
@@ -874,11 +902,11 @@ $$('[data-popup-open]').forEach(btn => {
       cf_cargo:                     lead.cargo,
       cf_faturamento_medio_mensal:  lead.faturamento,
       cf_ticket_medio_aproximado:   lead.ticket
-    }, lan4RdUtmPayload()))
+    }, lan4ExtrasRd(form), lan4RdUtmPayload()))
     .then(function (r) {
       return r.json().then(function (data) {
         if (!r.ok) throw new Error(r.status);
-        lan4PushLead('lan4-servicos-cta', lead);
+        lan4PushLead(identificador, lead);
         form.reset();
         form.classList.add('is-sent');
         msg.className = 'lf-msg ok';
@@ -910,14 +938,10 @@ $$('[data-popup-open]').forEach(btn => {
     var v   = function (n) { return lan4CampoValor(form, n); };
     var btn = form.querySelector('button[type="submit"]');
     var btnTexto = btn.textContent;
+    var identificador = lan4FormId(form, 'lan4-contato-site');
 
-    // Validação: todos os campos obrigatórios + telefone 11 dígitos corridos
-    var erro = lan4ValidaObrigatorios(form, [
-      ['nome', 'Nome'], ['email', 'Email'], ['telefone', 'Telefone'], ['empresa', 'Empresa'],
-      ['cargo', 'Cargo'], ['faturamento', 'Faturamento médio mensal'], ['ticket', 'Ticket médio aproximado'],
-      ['area_comercial', 'Como funciona sua área comercial hoje'], ['principal_desafio', 'Principal desafio hoje'],
-      ['lgpd_consent', 'Autorização de contato (LGPD)']
-    ]) || lan4ValidaTelefone(v('telefone'));
+    // Validação: obrigatórios declarados em data-req + telefone 11 dígitos corridos
+    var erro = lan4ValidaObrigatorios(form, lan4ReqDoForm(form)) || lan4ValidaTelefone(v('telefone'));
     if (erro) {
       msg.className = 'lf-msg err';
       msg.style.display = 'block';
@@ -937,23 +961,21 @@ $$('[data-popup-open]').forEach(btn => {
     };
 
     lan4EnviaRd(Object.assign({
-      token_rdstation:                            'd5d170dfe71825a3ebc37e6699f10652',
-      identificador:                               'lan4-contato-site',
-      email:                                       lead.email,
-      nome:                                        lead.nome,
-      telefone:                                    lead.telefone,
-      empresa:                                     lead.empresa,
-      cf_cargo:                                    lead.cargo,
-      cf_faturamento_medio_mensal:                 lead.faturamento,
-      cf_ticket_medio_aproximado:                  lead.ticket,
-      cf_como_funciona_sua_area_comercial_hoje:    v('area_comercial'),
-      cf_principal_desafio_hoje:                   v('principal_desafio')
-    }, lan4RdUtmPayload()))
+      token_rdstation:              'd5d170dfe71825a3ebc37e6699f10652',
+      identificador:                identificador,
+      email:                        lead.email,
+      nome:                         lead.nome,
+      telefone:                     lead.telefone,
+      empresa:                      lead.empresa,
+      cf_cargo:                     lead.cargo,
+      cf_faturamento_medio_mensal:  lead.faturamento,
+      cf_ticket_medio_aproximado:   lead.ticket
+    }, lan4ExtrasRd(form), lan4RdUtmPayload()))
     .then(function (r) {
       return r.json().then(function (data) {
         console.log('[RD Station] status:', r.status, 'response:', data);
         if (!r.ok) throw new Error(r.status + ' – ' + JSON.stringify(data));
-        lan4PushLead('lan4-contato-site', lead);
+        lan4PushLead(identificador, lead);
         form.reset();
         form.classList.add('is-sent');
         msg.className = 'lf-msg ok';
